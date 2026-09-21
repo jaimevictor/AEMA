@@ -1,0 +1,11 @@
+Unrelated report section
+Estimated power use (mAh):
+  Capacity: +4700, Rated: 4755, Typical: 4.9e3, Computed drain: +1.2e1, actual drain: 1.0e1-1.3e1
+  Global
+  screen: 6.4e2 apps: 6.3e2 duration: 2h
+UID u10a42: -1.2e-3 fg: +2.5e-4 bg: 3E-4
+    cpu=-4.5e-5 cpu:fg=+2E-5 wifi=0.0 (2s)
+UID 1000: 2
+    wakelock=1.5
+
+Ignored trailing section

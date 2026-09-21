@@ -1,0 +1,3 @@
+package:com.example.one uid:10001
+package:com.example.two uid:10001
+package:com.example.owner uid:1010042
