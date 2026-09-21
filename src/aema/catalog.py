@@ -60,13 +60,10 @@ _CHECKIN = """anr_count background_partial_count background_partial_current_dura
 _POWER = """actual_drain_max_mah actual_drain_min_mah background_estimated_charge_mah battery_capacity_mah computed_drain_mah cpu_estimated_charge_mah cpu_foreground_estimated_charge_mah foreground_estimated_charge_mah line_number measurement_kind rated_capacity_mah record_type screen_apps_estimated_charge_mah screen_estimated_charge_mah total_estimated_charge_mah typical_capacity_mah uid uid_text unit wakelock_estimated_charge_mah wifi_estimated_charge_mah""".split()
 _PACKAGES = ["line_number", "package_name", "uid"]
 
-_TIME_MS = {"ms"}
-_COUNT = {"count"}
-_BYTES = {"bytes"}
-_PACKET = {"packets"}
-
 
 def _unit(field: str) -> str | None:
+    if field.endswith("_count"):
+        return "count"
     if field.endswith("_time_ms") or field.endswith("_duration_ms"):
         return "ms"
     if field.endswith("_time_us"):
@@ -98,14 +95,44 @@ def _classification(field: str) -> str:
     return "numeric_metric"
 
 
+def _metric(field: str) -> str | None:
+    return None if _classification(field) != "numeric_metric" else field
+
+
+def _measurement_kind(field: str, frame: str) -> str | None:
+    if _classification(field) != "numeric_metric":
+        return None
+    if field.endswith("_mah"):
+        if frame == "power" and field in {
+            "battery_capacity_mah",
+            "rated_capacity_mah",
+            "typical_capacity_mah",
+        }:
+            return "reported_capacity"
+        if frame == "power" and field in {"actual_drain_min_mah", "actual_drain_max_mah"}:
+            return "reported_drain_range"
+        if frame == "power" and field == "total_estimated_charge_mah":
+            return "uid_attributed_charge_estimate"
+        return "estimated_or_attributed_charge"
+    if field.endswith("_count"):
+        return "reported_count"
+    if field.endswith("_time_ms") or field.endswith("_time_us") or field.endswith("_duration_ms"):
+        return "reported_duration"
+    if field.endswith("_bytes") or field.endswith("_packets"):
+        return "reported_quantity"
+    return "reported_value"
+
+
 CATALOG: tuple[CatalogEntry, ...] = tuple(
     [
         _entry(
             f,
             "checkin",
             _classification(f),
+            metric=_metric(f),
             unit=_unit(f),
-            note="unit not present in source"
+            kind=_measurement_kind(f, "checkin"),
+            note="unit not established by source"
             if _unit(f) is None and _classification(f) == "numeric_metric"
             else None,
         )
@@ -116,12 +143,9 @@ CATALOG: tuple[CatalogEntry, ...] = tuple(
             f,
             "power",
             _classification(f),
+            metric=_metric(f),
             unit=_unit(f),
-            kind="estimated_or_attributed"
-            if f
-            not in {"line_number", "record_type", "uid", "uid_text", "unit", "measurement_kind"}
-            and _classification(f) == "numeric_metric"
-            else None,
+            kind=_measurement_kind(f, "power"),
             note="source exposes field name but no independent unit" if f == "uid_text" else None,
         )
         for f in _POWER
