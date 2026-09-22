@@ -105,7 +105,13 @@ def _adapt_numeric_records(
                 continue
             records.append(_record(result, source, field, value, raw, uid=uid, payload=context))
     return tuple(records), CanonicalDiagnostics(
-        tuple(sorted(unknown)), tuple(sorted(unknown_details))
+        tuple(sorted(unknown)),
+        tuple(
+            sorted(
+                unknown_details,
+                key=lambda item: (item[0], item[1], item[2] is not None, item[2] or 0),
+            )
+        ),
     )
 
 
@@ -144,7 +150,15 @@ def adapt_battery_report(result: PipelineResult) -> CanonicalResult:
             )
     return CanonicalResult(
         records=tuple(records),
-        diagnostics=CanonicalDiagnostics(tuple(sorted(unknown)), tuple(sorted(unknown_details))),
+        diagnostics=CanonicalDiagnostics(
+            tuple(sorted(unknown)),
+            tuple(
+                sorted(
+                    unknown_details,
+                    key=lambda item: (item[0], item[1], item[2] is not None, item[2] or 0),
+                )
+            ),
+        ),
     )
 
 

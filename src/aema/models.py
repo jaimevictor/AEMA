@@ -277,6 +277,15 @@ class PackageUidRelation:
             raise ValueError("missing pipeline hash for source packages") from exc
         return cls(package_name, uid, Provenance(Source.PACKAGES, input_sha256, line_number))
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "package_name": self.package_name,
+            "uid": self.uid,
+            "source": self.provenance.source.value,
+            "input_sha256": self.provenance.input_sha256,
+            "line_number": self.provenance.line_number,
+        }
+
 
 @dataclass(slots=True)
 class ParseDiagnostics:

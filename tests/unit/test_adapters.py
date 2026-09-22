@@ -94,6 +94,18 @@ def test_unknown_numeric_field_is_reported_explicitly() -> None:
     assert adapted.diagnostics.unknown_numeric_diagnostics == (("checkin", "future_metric", 99),)
 
 
+def test_unknown_diagnostic_sort_accepts_missing_and_present_lines() -> None:
+    result = pipeline_result()
+    result.checkin.records.extend(
+        [{"future_metric": 1.0}, {"future_metric": 2.0, "line_number": 7}]
+    )
+    diagnostics = adapt_checkin(result).diagnostics
+    assert diagnostics.unknown_numeric_diagnostics == (
+        ("checkin", "future_metric", None),
+        ("checkin", "future_metric", 7),
+    )
+
+
 def test_uid_zero_keeps_ambiguous_context() -> None:
     result = pipeline_result()
     result.checkin.records.append(
