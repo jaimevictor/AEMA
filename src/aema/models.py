@@ -14,7 +14,7 @@ import pandas as pd
 
 Record = dict[str, Any]
 CANONICAL_SCHEMA_VERSION = "1.0"
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 _METRIC_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -53,8 +53,11 @@ class Provenance:
     line_number: int | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.source, Source):
+            raise TypeError("source must be a Source")
         if not isinstance(self.input_sha256, str) or not _SHA256_RE.fullmatch(self.input_sha256):
-            raise ValueError("input_sha256 must be a lowercase SHA-256 digest")
+            raise ValueError("input_sha256 must be a SHA-256 digest")
+        object.__setattr__(self, "input_sha256", self.input_sha256.lower())
         if self.line_number is not None and (
             isinstance(self.line_number, bool)
             or not isinstance(self.line_number, int)
@@ -90,6 +93,8 @@ class CanonicalRecord:
     def __post_init__(self) -> None:
         if self.schema_version != CANONICAL_SCHEMA_VERSION:
             raise ValueError("unsupported canonical schema version")
+        if not isinstance(self.source, Source):
+            raise TypeError("source must be a Source")
         if not isinstance(self.entity, str) or not self.entity.strip():
             raise ValueError("entity must be non-empty")
         if not isinstance(self.metric, str) or not _METRIC_RE.fullmatch(self.metric):
@@ -99,24 +104,42 @@ class CanonicalRecord:
             raise ValueError("unit must be a supported Unit or None")
         if not isinstance(self.measurement_kind, MeasurementKind):
             raise ValueError("measurement_kind must be supported")
+        if self.method is not None and not isinstance(self.method, str):
+            raise TypeError("method must be a string or None")
         if self.uid is not None and (
             isinstance(self.uid, bool) or not isinstance(self.uid, int) or self.uid < 0
         ):
             raise ValueError("uid must be a non-negative integer or None")
-        if self.package_name is not None and not self.package_name.strip():
-            raise ValueError("package_name must be non-empty when present")
+        if self.package_name is not None:
+            if not isinstance(self.package_name, str):
+                raise TypeError("package_name must be a string or None")
+            if not self.package_name.strip():
+                raise ValueError("package_name must be non-empty when present")
         if not isinstance(self.provenance, Provenance) or self.provenance.source != self.source:
             raise ValueError("provenance source must match record source")
+        if not isinstance(self.payload, dict):
+            raise TypeError("payload must be a dict")
+        try:
+            json.dumps(self.payload, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("payload must be JSON-serializable") from exc
         if self.source == Source.PACKAGES and self.uid is None:
             raise ValueError("package relation requires uid")
-        self._validate_catalog_unit()
+        self._validate_catalog_contract()
 
-    def _validate_catalog_unit(self) -> None:
+    def _validate_catalog_contract(self) -> None:
         from aema.catalog import CATALOG_BY_FIELD
 
         entry = CATALOG_BY_FIELD.get((self.source.value, self.metric))
-        if entry is not None and entry.unit is not None and self.unit != Unit(entry.unit):
+        if entry is None:
+            raise ValueError(f"unknown catalog metric {self.source.value}:{self.metric}")
+        if self.entity != entry.entity:
+            raise ValueError(f"entity incompatible with catalog metric {self.metric}")
+        expected_unit = Unit(entry.unit) if entry.unit is not None else None
+        if self.unit != expected_unit:
             raise ValueError(f"unit incompatible with catalog metric {self.metric}")
+        if self.measurement_kind.value != entry.measurement_kind:
+            raise ValueError(f"measurement kind incompatible with catalog metric {self.metric}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -163,7 +186,60 @@ class CanonicalRecord:
         return cls.from_dict(json.loads(text))
 
     def to_row(self) -> dict[str, Any]:
-        return self.to_dict()
+        row = self.to_dict()
+        row["payload"] = json.dumps(
+            self.payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return row
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> CanonicalRecord:
+        data = dict(row)
+        payload = data.get("payload", "{}")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        data["payload"] = payload
+        return cls.from_dict(data)
+
+    @classmethod
+    def from_pipeline_result(
+        cls,
+        *,
+        pipeline_result: PipelineResult,
+        source: Source,
+        entity: str,
+        metric: str,
+        value: int | float,
+        unit: Unit | None,
+        measurement_kind: MeasurementKind,
+        method: str | None = None,
+        uid: int | None = None,
+        package_name: str | None = None,
+        line_number: int | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> CanonicalRecord:
+        hash_key = {
+            Source.CHECKIN: "checkin",
+            Source.POWER: "battery_report",
+            Source.PACKAGES: "packages",
+        }[source]
+        try:
+            input_sha256 = pipeline_result.input_hashes[hash_key]
+        except KeyError as exc:
+            raise ValueError(f"missing pipeline hash for source {source.value}") from exc
+        return cls(
+            entity,
+            metric,
+            value,
+            unit,
+            measurement_kind,
+            source,
+            method,
+            uid,
+            package_name,
+            Provenance(source, input_sha256, line_number),
+            {} if payload is None else payload,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,12 +251,31 @@ class PackageUidRelation:
     provenance: Provenance
 
     def __post_init__(self) -> None:
+        if not isinstance(self.package_name, str):
+            raise TypeError("package_name must be a string")
         if not self.package_name.strip():
             raise ValueError("package_name must be non-empty")
         if isinstance(self.uid, bool) or not isinstance(self.uid, int) or self.uid < 0:
             raise ValueError("uid must be a non-negative integer")
+        if not isinstance(self.provenance, Provenance):
+            raise TypeError("provenance must be Provenance")
         if self.provenance.source != Source.PACKAGES:
             raise ValueError("package relation provenance must use packages source")
+
+    @classmethod
+    def from_pipeline_result(
+        cls,
+        *,
+        pipeline_result: PipelineResult,
+        package_name: str,
+        uid: int,
+        line_number: int | None = None,
+    ) -> PackageUidRelation:
+        try:
+            input_sha256 = pipeline_result.input_hashes["packages"]
+        except KeyError as exc:
+            raise ValueError("missing pipeline hash for source packages") from exc
+        return cls(package_name, uid, Provenance(Source.PACKAGES, input_sha256, line_number))
 
 
 @dataclass(slots=True)
