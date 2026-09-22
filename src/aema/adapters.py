@@ -19,6 +19,8 @@ from aema.models import (
 @dataclass(frozen=True, slots=True)
 class CanonicalDiagnostics:
     unknown_numeric_fields: tuple[str, ...] = ()
+    unknown_numeric_diagnostics: tuple[tuple[str, str, int | None], ...] = ()
+    issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,29 +69,44 @@ def _adapt_numeric_records(
 ) -> tuple[tuple[CanonicalRecord, ...], CanonicalDiagnostics]:
     records: list[CanonicalRecord] = []
     unknown: set[str] = set()
+    unknown_details: set[tuple[str, str, int | None]] = set()
     for raw in rows:
         uid = raw.get("uid")
-        if source is Source.CHECKIN and uid == 0:
-            uid = None
         context = {
             key: value
             for key, value in raw.items()
-            if key in {"category", "tag", "process_name", "wakelock_name", "power_item"}
+            if key
+            in {
+                "category",
+                "tag",
+                "checkin_version",
+                "process_name",
+                "wakelock_name",
+                "power_item",
+                "is_hidden_or_system_consumer",
+            }
         }
         if raw.get("uid") == 0:
-            context["uid_scope"] = "global"
             context["uid_original"] = 0
+            if raw.get("category") == "l" and raw.get("tag") == "m":
+                uid = None
+                context["uid_scope"] = "global"
+            else:
+                context["uid_scope"] = "ambiguous"
         for field, value in raw.items():
             if not _is_number(value):
                 continue
             entry = CATALOG_BY_FIELD.get((source.value, field))
             if entry is None:
                 unknown.add(field)
+                unknown_details.add((source.value, field, raw.get("line_number")))
                 continue
             if entry.metric is None:
                 continue
             records.append(_record(result, source, field, value, raw, uid=uid, payload=context))
-    return tuple(records), CanonicalDiagnostics(tuple(sorted(unknown)))
+    return tuple(records), CanonicalDiagnostics(
+        tuple(sorted(unknown)), tuple(sorted(unknown_details))
+    )
 
 
 def adapt_checkin(result: PipelineResult) -> CanonicalResult:
@@ -100,6 +117,7 @@ def adapt_checkin(result: PipelineResult) -> CanonicalResult:
 def adapt_battery_report(result: PipelineResult) -> CanonicalResult:
     records: list[CanonicalRecord] = []
     unknown: set[str] = set()
+    unknown_details: set[tuple[str, str, int | None]] = set()
     for raw in result.battery_report.records:
         uid = raw.get("uid")
         context = {
@@ -117,6 +135,7 @@ def adapt_battery_report(result: PipelineResult) -> CanonicalResult:
             entry = CATALOG_BY_FIELD.get((Source.POWER.value, field))
             if entry is None:
                 unknown.add(field)
+                unknown_details.add((Source.POWER.value, field, raw.get("line_number")))
                 continue
             if entry.metric is None:
                 continue
@@ -125,7 +144,7 @@ def adapt_battery_report(result: PipelineResult) -> CanonicalResult:
             )
     return CanonicalResult(
         records=tuple(records),
-        diagnostics=CanonicalDiagnostics(tuple(sorted(unknown))),
+        diagnostics=CanonicalDiagnostics(tuple(sorted(unknown)), tuple(sorted(unknown_details))),
     )
 
 
@@ -146,13 +165,42 @@ def adapt_pipeline(result: PipelineResult) -> CanonicalResult:
     checkin = adapt_checkin(result)
     power = adapt_battery_report(result)
     packages = adapt_packages(result)
+    package_uids = {relation.uid for relation in packages.relations}
+    estimate_uids = {
+        record.uid
+        for record in power.records
+        if record.uid is not None and record.metric == "total_estimated_charge_mah"
+    }
+    package_pairs = [(relation.package_name, relation.uid) for relation in packages.relations]
+    duplicate_pairs = sorted({pair for pair in package_pairs if package_pairs.count(pair) > 1})
+    uid_counts = {
+        uid: sum(pair_uid == uid for _, pair_uid in package_pairs) for uid in package_uids
+    }
+    shared_uids = sorted(uid for uid, count in uid_counts.items() if count > 1)
+    issues = [
+        f"duplicate package/UID relation: {package}:{uid}" for package, uid in duplicate_pairs
+    ]
+    issues.extend(f"UID {uid} has multiple packages" for uid in shared_uids)
+    issues.extend(
+        f"UID {uid} has estimate but no package" for uid in sorted(estimate_uids - package_uids)
+    )
+    issues.extend(
+        f"UID {uid} has package but no estimate" for uid in sorted(package_uids - estimate_uids)
+    )
     diagnostics = CanonicalDiagnostics(
         tuple(
             sorted(
                 set(checkin.diagnostics.unknown_numeric_fields)
                 | set(power.diagnostics.unknown_numeric_fields)
             )
-        )
+        ),
+        tuple(
+            sorted(
+                set(checkin.diagnostics.unknown_numeric_diagnostics)
+                | set(power.diagnostics.unknown_numeric_diagnostics)
+            )
+        ),
+        tuple(dict.fromkeys(issues)),
     )
     return CanonicalResult(
         records=checkin.records + power.records,

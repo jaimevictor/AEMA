@@ -1,0 +1,4 @@
+record_type,uid_text,unit,measurement_kind,line_number,uid,battery_capacity_mah,rated_capacity_mah,typical_capacity_mah,computed_drain_mah,actual_drain_min_mah,actual_drain_max_mah,screen_estimated_charge_mah,screen_apps_estimated_charge_mah,total_estimated_charge_mah,foreground_estimated_charge_mah,background_estimated_charge_mah,cpu_estimated_charge_mah,cpu_foreground_estimated_charge_mah,wifi_estimated_charge_mah,wakelock_estimated_charge_mah
+summary,global,mAh,estimated_or_attributed,3,,4700.0,4755.0,4900.0,12.0,10.0,13.0,640.0,630.0,,,,,,,
+uid,u10a42,mAh,estimated_or_attributed,6,1010042.0,,,,,,,,,-0.0012,0.00025,0.0003,-4.5e-05,2e-05,0.0,
+uid,1000,mAh,estimated_or_attributed,8,1000.0,,,,,,,,,2.0,,,,,,1.5

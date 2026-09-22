@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aema.adapters import adapt_battery_report, adapt_checkin, adapt_packages, adapt_pipeline
+from aema.exporters import export_pipeline_result
 from aema.models import MeasurementKind, PipelineInputs, Source, Unit
 from aema.pipeline import run_pipeline
 
@@ -41,6 +42,8 @@ def test_checkin_preserves_context_and_catalog_semantics() -> None:
     assert process.measurement_kind is MeasurementKind.REPORTED_DURATION
     assert power.unit is Unit.MAH
     assert power.payload["tag"] == "pwi"
+    assert power.payload["checkin_version"] == 9
+    assert power.payload["is_hidden_or_system_consumer"] is True
     assert global_item.uid is None
     assert global_item.payload["uid_scope"] == "global"
 
@@ -78,6 +81,9 @@ def test_adaptation_is_deterministic_and_combined() -> None:
     assert all(
         record.provenance.source in {Source.CHECKIN, Source.POWER} for record in first.records
     )
+    assert "UID 10001 has package but no estimate" in first.diagnostics.issues
+    assert "UID 1000 has estimate but no package" in first.diagnostics.issues
+    assert "UID 10001 has multiple packages" in first.diagnostics.issues
 
 
 def test_unknown_numeric_field_is_reported_explicitly() -> None:
@@ -85,3 +91,36 @@ def test_unknown_numeric_field_is_reported_explicitly() -> None:
     result.checkin.records.append({"uid": 10001, "line_number": 99, "future_metric": 1.0})
     adapted = adapt_checkin(result)
     assert adapted.diagnostics.unknown_numeric_fields == ("future_metric",)
+    assert adapted.diagnostics.unknown_numeric_diagnostics == (("checkin", "future_metric", 99),)
+
+
+def test_uid_zero_keeps_ambiguous_context() -> None:
+    result = pipeline_result()
+    result.checkin.records.append(
+        {
+            "checkin_version": 9,
+            "uid": 0,
+            "category": "l",
+            "tag": "pr",
+            "line_number": 100,
+            "process_name": "system",
+            "user_time_ms": 1,
+        }
+    )
+    record = next(
+        item for item in adapt_checkin(result).records if item.provenance.line_number == 100
+    )
+    assert record.uid == 0
+    assert record.payload["uid_scope"] == "ambiguous"
+    assert record.payload["uid_original"] == 0
+
+
+def test_historical_csv_golden_bytes_remain_unchanged(tmp_path: Path) -> None:
+    output = export_pipeline_result(pipeline_result(), tmp_path)
+    golden = Path("tests/fixtures/golden")
+    for name in (
+        "stats_checkin_parsed.csv",
+        "stats_power_estimates_parsed.csv",
+        "package_uid_parsed.csv",
+    ):
+        assert (output / name).read_bytes() == (golden / name).read_bytes()
