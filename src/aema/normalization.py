@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 
 from aema.errors import ParseError
@@ -34,7 +35,11 @@ def parse_float(value: str, field: str, line_number: int | None = None) -> float
     if not _NUMBER_RE.fullmatch(value):
         location = f"line {line_number}: " if line_number is not None else ""
         raise ParseError(f"{location}invalid number for {field}: {value!r}")
-    return float(value)
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        location = f"line {line_number}: " if line_number is not None else ""
+        raise ParseError(f"{location}non-finite number for {field}: {value!r}")
+    return parsed
 
 
 def normalize_android_uid(value: str, *, line_number: int = 0) -> int:

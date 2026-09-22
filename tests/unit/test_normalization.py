@@ -32,6 +32,8 @@ def test_numeric_parsers_preserve_sign_and_scientific_notation() -> None:
         parse_int("1.2", "count", 7)
     with pytest.raises(ParseError, match="invalid number"):
         parse_float("12mAh", "charge", 8)
+    with pytest.raises(ParseError, match="non-finite number"):
+        parse_float("1e309", "charge", 9)
 
 
 def test_descriptive_power_keys_include_unit_and_state() -> None:

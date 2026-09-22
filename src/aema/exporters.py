@@ -101,7 +101,7 @@ def export_canonical_result(
             },
             "manifest_format_version": MANIFEST_FORMAT_VERSION,
             "catalog_version": CATALOG_VERSION,
-            "canonical_schema_version": "1.0",
+            "canonical_schema_version": CANONICAL_SCHEMA_VERSION,
             "files": files,
             "artifact_sha256": artifact_sha256,
             "counts": {

@@ -7,9 +7,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from aema.catalog import CATALOG_VERSION
 from aema.errors import ExportError
 from aema.exporters import export_canonical_result, export_pipeline_result
 from aema.models import (
+    CANONICAL_SCHEMA_VERSION,
     CanonicalRecord,
     PackageUidRelation,
     ParseDiagnostics,
@@ -43,7 +45,8 @@ def test_canonical_export_round_trip_manifest_and_artifact_hashes(tmp_path: Path
     output = export_canonical_result(result, tmp_path)
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_format_version"] == "2.0"
-    assert manifest["canonical_schema_version"] == "1.0"
+    assert manifest["canonical_schema_version"] == CANONICAL_SCHEMA_VERSION
+    assert manifest["catalog_version"] == CATALOG_VERSION
     assert manifest["counts"]["canonical_records"] == 88
     assert manifest["counts"]["package_uid_relations"] == 3
     assert set(manifest["files"]) == set(manifest["artifact_sha256"])
@@ -64,6 +67,21 @@ def test_canonical_export_round_trip_manifest_and_artifact_hashes(tmp_path: Path
     assert len(relations) == manifest["counts"]["package_uid_relations"]
     assert [item.to_dict() for item in relations] == relation_rows
     assert manifest["limitations"]
+
+
+def test_canonical_export_preserves_historical_csv_golden(tmp_path: Path) -> None:
+    root = Path("tests/fixtures")
+    result = run_pipeline(
+        PipelineInputs(root / "checkin_v9.csv", root / "battery_report.txt", root / "packages.txt")
+    )
+    output = export_canonical_result(result, tmp_path)
+    golden = root / "golden"
+    for filename in (
+        "stats_checkin_parsed.csv",
+        "stats_power_estimates_parsed.csv",
+        "package_uid_parsed.csv",
+    ):
+        assert (output / filename).read_bytes() == (golden / filename).read_bytes()
 
 
 def test_canonical_export_rejects_result_from_other_execution(tmp_path: Path) -> None:
