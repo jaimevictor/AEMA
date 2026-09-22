@@ -61,3 +61,33 @@ def test_checkin_detects_utf16_bom(tmp_path: Path) -> None:
     path = tmp_path / "utf16.csv"
     path.write_text("9,0,i,vers\n9,1,l,pwi,cpu,1,0,0,0\n", encoding="utf-16")
     assert CheckinParser(path).parse_result().records[0]["power_item"] == "cpu"
+
+
+def test_checkin_detects_utf8_bom(tmp_path: Path) -> None:
+    path = tmp_path / "utf8-bom.csv"
+    path.write_text("9,0,i,vers\n9,1,l,pwi,cpu,1,0,0,0\n", encoding="utf-8-sig")
+    assert CheckinParser(path).parse_result().records[0]["power_item"] == "cpu"
+
+
+@pytest.mark.parametrize("value", ["NaN", "inf", "1e309"])
+def test_checkin_rejects_invalid_or_non_finite_numbers(tmp_path: Path, value: str) -> None:
+    path = tmp_path / "invalid-number.csv"
+    path.write_text(
+        f"9,0,i,vers\n9,1,l,pwi,cpu,{value},0,0,0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ParseError):
+        CheckinParser(path).parse_result()
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_incompatible_version_after_valid_header_is_always_fatal(
+    tmp_path: Path, strict: bool
+) -> None:
+    path = tmp_path / "mixed-version.csv"
+    path.write_text(
+        "9,0,i,vers\n9,1,l,pwi,cpu,1,0,0,0\n10,1,l,pwi,cpu,1,0,0,0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsupportedVersionError, match=r"mixed-version\.csv:3:"):
+        CheckinParser(path, strict=strict).parse_result()

@@ -26,11 +26,12 @@ CAPACITY_RE = re.compile(
     re.IGNORECASE,
 )
 UID_RE = re.compile(rf"^\s*UID\s+([^:]+):\s*({NUMBER_PATTERN})(.*)$", re.IGNORECASE)
-STATE_RE = re.compile(rf"\b(fg|bg|fgs|cached):\s*({NUMBER_PATTERN})", re.IGNORECASE)
-DETAIL_RE = re.compile(rf"\b([A-Za-z_]+(?::[A-Za-z_]+)?)=({NUMBER_PATTERN})")
+STATE_RE = re.compile(r"\b(fg|bg|fgs|cached):\s*([^\s,)]+)", re.IGNORECASE)
+DETAIL_RE = re.compile(r"\b([A-Za-z_]+(?::[A-Za-z_]+)?)=([^\s,)]+)")
 GLOBAL_DETAIL_RE = re.compile(
     rf"^\s*([A-Za-z_]+):\s*({NUMBER_PATTERN})\s+apps:\s*({NUMBER_PATTERN})"
 )
+GLOBAL_DETAIL_CANDIDATE_RE = re.compile(r"^\s*[A-Za-z_]+:\s*\S+\s+apps:\s*\S+")
 
 
 class BatteryReportParser:
@@ -79,20 +80,43 @@ class BatteryReportParser:
                                 raise ParseError(message) from exc
                             diagnostics.warnings.append(message)
                         continue
+                    if line.lstrip().lower().startswith("uid "):
+                        current_uid = None
+                        message = f"{self.file_path}:{line_number}: malformed UID power record"
+                        if self.strict:
+                            raise ParseError(message)
+                        diagnostics.warnings.append(message)
+                        continue
                     if current_uid is not None:
                         self._add_uid_details(current_uid, line, line_number, diagnostics)
                         continue
                     global_match = GLOBAL_DETAIL_RE.match(line)
                     if global_match and records:
                         component, total, apps = global_match.groups()
-                        records[0][normalize_power_key(component)] = parse_float(
-                            total, component, line_number
-                        )
-                        records[0][f"{component.lower()}_apps_estimated_charge_mah"] = parse_float(
-                            apps, f"{component}_apps", line_number
-                        )
+                        try:
+                            values = {
+                                normalize_power_key(component): parse_float(total, component),
+                                f"{component.lower()}_apps_estimated_charge_mah": parse_float(
+                                    apps, f"{component}_apps"
+                                ),
+                            }
+                        except (ParseError, ValueError) as exc:
+                            message = f"{self.file_path}:{line_number}: {exc}"
+                            if self.strict:
+                                raise ParseError(message) from exc
+                            diagnostics.warnings.append(message)
+                            continue
+                        records[0].update(values)
+                        continue
+                    if GLOBAL_DETAIL_CANDIDATE_RE.match(line):
+                        message = f"{self.file_path}:{line_number}: malformed global power record"
+                        if self.strict:
+                            raise ParseError(message)
+                        diagnostics.warnings.append(message)
         except UnicodeDecodeError as exc:
             raise ParseError(f"cannot decode {self.file_path}: {exc}") from exc
+        except OSError as exc:
+            raise ParseError(f"cannot read {self.file_path}: {exc}") from exc
 
         if not in_section:
             raise ParseError(f"{self.file_path}: missing {SECTION_HEADER!r} section")
@@ -159,12 +183,21 @@ class BatteryReportParser:
         line_number: int,
         diagnostics: ParseDiagnostics,
     ) -> None:
+        pending: Record = {}
         for key, value in DETAIL_RE.findall(line):
             normalized = normalize_power_key(key)
-            if normalized in record:
+            if normalized in record or normalized in pending:
                 message = f"{self.file_path}:{line_number}: duplicate detail key {key!r}"
                 if self.strict:
                     raise ParseError(message)
                 diagnostics.warnings.append(message)
                 continue
-            record[normalized] = parse_float(value, key, line_number)
+            try:
+                pending[normalized] = parse_float(value, key)
+            except (ParseError, ValueError) as exc:
+                message = f"{self.file_path}:{line_number}: {exc}"
+                if self.strict:
+                    raise ParseError(message) from exc
+                diagnostics.warnings.append(message)
+                return
+        record.update(pending)

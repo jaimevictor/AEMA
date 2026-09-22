@@ -53,3 +53,47 @@ def test_battery_report_leniently_reports_duplicate_detail(tmp_path: Path) -> No
     result = BatteryReportParser(path, strict=False).parse_result()
     assert result.records[1]["cpu_estimated_charge_mah"] == 1
     assert len(result.diagnostics.warnings) == 1
+
+
+@pytest.mark.parametrize("strict", [True, False])
+@pytest.mark.parametrize("invalid_value", ["NaN", "inf", "1e309"])
+def test_uid_detail_numeric_error_is_contextual_and_atomic(
+    tmp_path: Path, strict: bool, invalid_value: str
+) -> None:
+    path = tmp_path / "invalid-detail.txt"
+    path.write_text(
+        "Estimated power use (mAh):\n"
+        "Capacity: 1, Rated: 1, Typical: 1, Computed drain: 1, actual drain: 1-1\n"
+        f"UID 1: 1\n    cpu=1 wifi={invalid_value}\n\n",
+        encoding="utf-8",
+    )
+    if strict:
+        with pytest.raises(ParseError, match=r"invalid-detail\.txt:4:.*(?:invalid|non-finite)"):
+            BatteryReportParser(path).parse_result()
+        return
+    result = BatteryReportParser(path, strict=False).parse_result()
+    uid = result.records[1]
+    assert "cpu_estimated_charge_mah" not in uid
+    assert "wifi_estimated_charge_mah" not in uid
+    assert len(result.diagnostics.warnings) == 1
+    assert f"{path}:4:" in result.diagnostics.warnings[0]
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_global_detail_numeric_error_is_contextual_and_atomic(tmp_path: Path, strict: bool) -> None:
+    path = tmp_path / "invalid-global.txt"
+    path.write_text(
+        "Estimated power use (mAh):\n"
+        "Capacity: 1, Rated: 1, Typical: 1, Computed drain: 1, actual drain: 1-1\n"
+        "screen: 1 apps: 1e309\nUID 1: 1\n\n",
+        encoding="utf-8",
+    )
+    if strict:
+        with pytest.raises(ParseError, match=r"invalid-global\.txt:3:.*non-finite"):
+            BatteryReportParser(path).parse_result()
+        return
+    result = BatteryReportParser(path, strict=False).parse_result()
+    summary = result.records[0]
+    assert "screen_estimated_charge_mah" not in summary
+    assert "screen_apps_estimated_charge_mah" not in summary
+    assert len(result.diagnostics.warnings) == 1

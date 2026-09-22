@@ -60,13 +60,15 @@ class CheckinParser:
                         records.append(self._parse_supported(row, line_number))
                     except (ParseError, ValueError) as exc:
                         message = f"{self.file_path}:{line_number}: {exc}"
+                        if isinstance(exc, UnsupportedVersionError):
+                            raise UnsupportedVersionError(message) from exc
                         if self.strict:
-                            if isinstance(exc, UnsupportedVersionError):
-                                raise UnsupportedVersionError(message) from exc
                             raise ParseError(message) from exc
                         diagnostics.warnings.append(message)
         except UnicodeDecodeError as exc:
             raise ParseError(f"cannot decode {self.file_path}: {exc}") from exc
+        except OSError as exc:
+            raise ParseError(f"cannot read {self.file_path}: {exc}") from exc
 
         if version is None:
             raise ParseError(f"{self.file_path}: missing version record")

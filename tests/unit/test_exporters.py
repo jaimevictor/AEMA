@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import aema.exporters as exporters
 from aema.catalog import CATALOG_VERSION
 from aema.errors import ExportError
 from aema.exporters import export_canonical_result, export_pipeline_result
@@ -117,5 +118,54 @@ def test_canonical_export_failure_does_not_publish_partial_directory(
 
     monkeypatch.setattr(pd.DataFrame, "to_csv", fail_export)
     with pytest.raises(ExportError, match="disk full"):
+        export_canonical_result(result, tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("filename", ["canonical_records.jsonl", "canonical_relations.jsonl"])
+def test_jsonl_failure_does_not_publish_partial_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    root = Path("tests/fixtures")
+    result = run_pipeline(
+        PipelineInputs(root / "checkin_v9.csv", root / "battery_report.txt", root / "packages.txt")
+    )
+    original = exporters._write_jsonl
+
+    def fail_selected(path: Path, rows: list[dict]) -> None:
+        if path.name == filename:
+            raise OSError(f"cannot write {filename}")
+        original(path, rows)
+
+    monkeypatch.setattr(exporters, "_write_jsonl", fail_selected)
+    with pytest.raises(ExportError, match=filename):
+        export_canonical_result(result, tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("stage", ["manifest", "publish"])
+def test_finalization_failure_does_not_publish_partial_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    root = Path("tests/fixtures")
+    result = run_pipeline(
+        PipelineInputs(root / "checkin_v9.csv", root / "battery_report.txt", root / "packages.txt")
+    )
+    if stage == "manifest":
+        original_write = Path.write_text
+
+        def fail_manifest(path: Path, *args, **kwargs):
+            if path.name == "manifest.json":
+                raise OSError("manifest write failed")
+            return original_write(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fail_manifest)
+    else:
+
+        def fail_publish(*args) -> None:
+            raise OSError("publish failed")
+
+        monkeypatch.setattr(exporters.os, "replace", fail_publish)
+    with pytest.raises(ExportError, match="failed"):
         export_canonical_result(result, tmp_path)
     assert list(tmp_path.iterdir()) == []

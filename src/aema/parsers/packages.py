@@ -55,6 +55,8 @@ class PackageUidParser:
                     )
         except UnicodeDecodeError as exc:
             raise ParseError(f"cannot decode {self.file_path}: {exc}") from exc
+        except OSError as exc:
+            raise ParseError(f"cannot read {self.file_path}: {exc}") from exc
 
         if not records:
             raise ParseError(f"{self.file_path}: no package/UID records found")
