@@ -14,7 +14,7 @@ from uuid import uuid4
 from aema.adapters import CanonicalResult, adapt_pipeline
 from aema.catalog import CATALOG_VERSION
 from aema.errors import ExportError
-from aema.models import PipelineResult
+from aema.models import CANONICAL_SCHEMA_VERSION, PackageUidRelation, PipelineResult, Source
 
 MANIFEST_FORMAT_VERSION = "2.0"
 
@@ -27,6 +27,30 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _validate_canonical_result(result: PipelineResult, canonical: CanonicalResult) -> None:
+    expected = {
+        Source.CHECKIN: result.input_hashes.get("checkin"),
+        Source.POWER: result.input_hashes.get("battery_report"),
+        Source.PACKAGES: result.input_hashes.get("packages"),
+    }
+    for record in canonical.records:
+        if record.schema_version != CANONICAL_SCHEMA_VERSION:
+            raise ExportError("canonical record schema version mismatch")
+        expected_hash = expected.get(record.source)
+        if expected_hash is None or record.provenance.source is not record.source:
+            raise ExportError("canonical record provenance source mismatch")
+        if record.provenance.input_sha256 != expected_hash.lower():
+            raise ExportError("canonical record input hash mismatch")
+    for relation in canonical.relations:
+        if not isinstance(relation, PackageUidRelation):
+            raise ExportError("canonical relation type mismatch")
+        if relation.provenance.source is not Source.PACKAGES:
+            raise ExportError("canonical relation provenance source mismatch")
+        expected_hash = expected[Source.PACKAGES]
+        if expected_hash is None or relation.provenance.input_sha256 != expected_hash.lower():
+            raise ExportError("canonical relation input hash mismatch")
 
 
 def export_canonical_result(
@@ -44,7 +68,8 @@ def export_canonical_result(
     try:
         for filename, frame in result.frames().items():
             frame.to_csv(temp_dir / filename, index=False, encoding="utf-8")
-        canonical = canonical or adapt_pipeline(result)
+        canonical = adapt_pipeline(result) if canonical is None else canonical
+        _validate_canonical_result(result, canonical)
         _write_jsonl(
             temp_dir / "canonical_records.jsonl", [row.to_dict() for row in canonical.records]
         )

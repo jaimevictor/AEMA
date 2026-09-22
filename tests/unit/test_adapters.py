@@ -127,6 +127,28 @@ def test_uid_zero_keeps_ambiguous_context() -> None:
     assert record.payload["uid_original"] == 0
 
 
+def test_duplicate_pair_does_not_count_as_shared_uid() -> None:
+    result = pipeline_result()
+    result.packages.records[:] = [
+        {"package_name": "app.one", "uid": 10001, "line_number": 1},
+        {"package_name": "app.one", "uid": 10001, "line_number": 2},
+    ]
+    issues = adapt_pipeline(result).diagnostics.issues
+    assert "duplicate package/UID relation: app.one:10001" in issues
+    assert "UID 10001 has multiple packages" not in issues
+
+
+def test_distinct_packages_count_as_shared_uid() -> None:
+    result = pipeline_result()
+    result.packages.records[:] = [
+        {"package_name": "app.one", "uid": 10001, "line_number": 1},
+        {"package_name": "app.two", "uid": 10001, "line_number": 2},
+    ]
+    issues = adapt_pipeline(result).diagnostics.issues
+    assert "UID 10001 has multiple packages" in issues
+    assert not any(issue.startswith("duplicate package/UID relation:") for issue in issues)
+
+
 def test_historical_csv_golden_bytes_remain_unchanged(tmp_path: Path) -> None:
     output = export_pipeline_result(pipeline_result(), tmp_path)
     golden = Path("tests/fixtures/golden")

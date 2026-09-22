@@ -33,6 +33,15 @@ class CanonicalResult:
         return [record.to_row() for record in self.records]
 
 
+def sort_unknown_diagnostics(
+    diagnostics: set[tuple[str, str, int | None]] | tuple[tuple[str, str, int | None], ...],
+) -> tuple[tuple[str, str, int | None], ...]:
+    """Sort source/field/line diagnostics with missing lines before numbered lines."""
+    return tuple(
+        sorted(diagnostics, key=lambda item: (item[0], item[1], item[2] is not None, item[2] or 0))
+    )
+
+
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -106,12 +115,7 @@ def _adapt_numeric_records(
             records.append(_record(result, source, field, value, raw, uid=uid, payload=context))
     return tuple(records), CanonicalDiagnostics(
         tuple(sorted(unknown)),
-        tuple(
-            sorted(
-                unknown_details,
-                key=lambda item: (item[0], item[1], item[2] is not None, item[2] or 0),
-            )
-        ),
+        sort_unknown_diagnostics(unknown_details),
     )
 
 
@@ -152,12 +156,7 @@ def adapt_battery_report(result: PipelineResult) -> CanonicalResult:
         records=tuple(records),
         diagnostics=CanonicalDiagnostics(
             tuple(sorted(unknown)),
-            tuple(
-                sorted(
-                    unknown_details,
-                    key=lambda item: (item[0], item[1], item[2] is not None, item[2] or 0),
-                )
-            ),
+            sort_unknown_diagnostics(unknown_details),
         ),
     )
 
@@ -187,10 +186,10 @@ def adapt_pipeline(result: PipelineResult) -> CanonicalResult:
     }
     package_pairs = [(relation.package_name, relation.uid) for relation in packages.relations]
     duplicate_pairs = sorted({pair for pair in package_pairs if package_pairs.count(pair) > 1})
-    uid_counts = {
-        uid: sum(pair_uid == uid for _, pair_uid in package_pairs) for uid in package_uids
-    }
-    shared_uids = sorted(uid for uid, count in uid_counts.items() if count > 1)
+    packages_by_uid: dict[int, set[str]] = {}
+    for package, uid in package_pairs:
+        packages_by_uid.setdefault(uid, set()).add(package)
+    shared_uids = sorted(uid for uid, packages in packages_by_uid.items() if len(packages) > 1)
     issues = [
         f"duplicate package/UID relation: {package}:{uid}" for package, uid in duplicate_pairs
     ]
@@ -208,11 +207,9 @@ def adapt_pipeline(result: PipelineResult) -> CanonicalResult:
                 | set(power.diagnostics.unknown_numeric_fields)
             )
         ),
-        tuple(
-            sorted(
-                set(checkin.diagnostics.unknown_numeric_diagnostics)
-                | set(power.diagnostics.unknown_numeric_diagnostics)
-            )
+        sort_unknown_diagnostics(
+            set(checkin.diagnostics.unknown_numeric_diagnostics)
+            | set(power.diagnostics.unknown_numeric_diagnostics)
         ),
         tuple(dict.fromkeys(issues)),
     )

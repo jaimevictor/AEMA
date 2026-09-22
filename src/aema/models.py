@@ -286,6 +286,14 @@ class PackageUidRelation:
             "line_number": self.provenance.line_number,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PackageUidRelation:
+        return cls(
+            data["package_name"],
+            data["uid"],
+            Provenance(Source(data["source"]), data["input_sha256"], data.get("line_number")),
+        )
+
 
 @dataclass(slots=True)
 class ParseDiagnostics:
